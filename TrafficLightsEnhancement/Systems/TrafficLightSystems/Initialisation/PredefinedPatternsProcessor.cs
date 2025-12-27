@@ -464,7 +464,7 @@ public class PredefinedPatternsProcessor
         }
     }
 
-    private static void SetupPedestrianLanes(ref InitializeTrafficLightsJob job, DynamicBuffer<SubLane> subLanes, int groupCount, NativeHashMap<Entity, NodeUtils.LaneConnection> laneConnectionMap)
+    public static void SetupPedestrianLanes(ref InitializeTrafficLightsJob job, DynamicBuffer<SubLane> subLanes, int groupCount, NativeHashMap<Entity, NodeUtils.LaneConnection> laneConnectionMap)
     {
         for (int i = 0; i < subLanes.Length; i++)
         {

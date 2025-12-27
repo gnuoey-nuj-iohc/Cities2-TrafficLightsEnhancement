@@ -295,45 +295,11 @@ public struct CustomPhaseProcessor
                 // Check if this is a pedestrian lane
                 bool isPedestrian = job.m_PedestrianLaneData.HasComponent(subLane);
                 
+                // Skip pedestrian lanes here - they are handled by SetupPedestrianLanes above
+                // SetupPedestrianLanes properly handles overlap detection and sets group masks
+                // so pedestrians only get green when vehicles crossing their path don't have green
                 if (isPedestrian)
                 {
-                    // For pedestrian lanes, find which edge they belong to and set group mask accordingly
-                    // Pedestrians should have green when the corresponding edge group is NOT active
-                    // This ensures pedestrians wait when vehicles have green on their crossing
-                    ushort edgeGroup = 0;
-                    if (laneConnectionMap.TryGetValue(subLane, out var laneConnection))
-                    {
-                        Entity sourceEdge = laneConnection.m_SourceEdge;
-                        if (sourceEdge != Entity.Null)
-                        {
-                            // Try to get edge group from edgeActualGroupMap first
-                            if (!useEdgeToGroupMap && edgeActualGroupMap.TryGetValue(sourceEdge, out ushort actualGroup))
-                            {
-                                edgeGroup = actualGroup;
-                            }
-                            // Then try edgeToGroupMap
-                            else if (edgeToGroupMap.TryGetValue(sourceEdge, out ushort assignedGroup))
-                            {
-                                edgeGroup = assignedGroup;
-                            }
-                        }
-                    }
-                    
-                    // If we found the edge group, set pedestrian to all groups except that edge's group
-                    // Otherwise, use all groups except the first one as fallback
-                    if (edgeGroup != 0)
-                    {
-                        // Pedestrian should have green when this edge group is NOT active
-                        ushort pedestrianGroupMask = (ushort)(((1 << groupCount) - 1) & ~edgeGroup);
-                        laneSignal.m_GroupMask = pedestrianGroupMask;
-                    }
-                    else
-                    {
-                        // Fallback: use all groups except the first one
-                        laneSignal.m_GroupMask = (ushort)(((1 << groupCount) - 1) & ~1);
-                    }
-                    
-                    job.m_LaneSignalData[subLane] = laneSignal;
                     continue;
                 }
                 
@@ -395,6 +361,30 @@ public struct CustomPhaseProcessor
 
                 job.m_LaneSignalData[subLane] = laneSignal;
             }
+            
+            // Initialize pedestrian lane group masks before SetupPedestrianLanes
+            // This ensures clean state for pedestrian lane processing
+            for (int i = 0; i < subLanes.Length; i++)
+            {
+                Entity subLane = subLanes[i].m_SubLane;
+                if (!job.m_PedestrianLaneData.HasComponent(subLane))
+                {
+                    continue;
+                }
+                if (!job.m_LaneSignalData.TryGetComponent(subLane, out LaneSignal laneSignal))
+                {
+                    continue;
+                }
+                // Reset pedestrian lane group mask to 0 so SetupPedestrianLanes can set it properly
+                laneSignal.m_GroupMask = 0;
+                job.m_LaneSignalData[subLane] = laneSignal;
+            }
+            
+            // Setup pedestrian lanes properly for Advanced Split Phasing
+            // This ensures pedestrians wait when vehicles have green on their crossing
+            // SetupPedestrianLanes checks overlaps with vehicle lanes and sets pedestrian group mask
+            // so pedestrians only get green when vehicles crossing their path don't have green
+            PredefinedPatternsProcessor.SetupPedestrianLanes(ref job, subLanes, groupCount, laneConnectionMap);
             
             // Create default CustomPhaseData for each group with adaptive settings
             // If CustomPhaseData already exists (for existing traffic lights), clear and recreate it

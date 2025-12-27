@@ -626,7 +626,10 @@ public class PredefinedPatternsProcessor
 
     public static void AddExclusivePedestrianPhase(ref InitializeTrafficLightsJob job, DynamicBuffer<SubLane> subLanes, ref int groupCount, ref TrafficLights trafficLights, ref CustomTrafficLights customTrafficLights)
     {
-        ushort pedestrianGroupMask = ushort.MaxValue;
+        // Calculate pedestrian group mask: aggregate all groups that have pedestrian lanes
+        ushort pedestrianGroupMask = 0; // Initialize with 0
+        ushort vehicleGroupMask = 0; // Initialize with 0
+        
         for (int i = 0; i < subLanes.Length; i++)
         {
             Entity subLane = subLanes[i].m_SubLane;
@@ -636,22 +639,29 @@ public class PredefinedPatternsProcessor
             }
             if (job.m_PedestrianLaneData.HasComponent(subLane))
             {
-                pedestrianGroupMask &= laneSignal.m_GroupMask;
+                // Aggregate all pedestrian groups using OR
+                pedestrianGroupMask |= laneSignal.m_GroupMask;
             }
-            else
+            else if (job.m_CarLaneData.HasComponent(subLane) || job.m_ExtraTypeHandle.m_TrackLane.HasComponent(subLane))
             {
-                pedestrianGroupMask &= (ushort)~laneSignal.m_GroupMask;
+                // Aggregate all vehicle groups using OR
+                vehicleGroupMask |= laneSignal.m_GroupMask;
             }
         }
 
-        if (pedestrianGroupMask == 0)
+        // Find pedestrian-only groups (groups that have pedestrians but no vehicles)
+        ushort exclusivePedestrianGroupMask = (ushort)(pedestrianGroupMask & ~vehicleGroupMask);
+        
+        // If no exclusive pedestrian group exists, create a new one
+        if (exclusivePedestrianGroupMask == 0)
         {
-            pedestrianGroupMask = (ushort)(1 << groupCount);
+            exclusivePedestrianGroupMask = (ushort)(1 << groupCount);
             groupCount++;
         }
 
-        customTrafficLights.SetPedestrianPhaseGroupMask(pedestrianGroupMask);
+        customTrafficLights.SetPedestrianPhaseGroupMask(exclusivePedestrianGroupMask);
 
+        // Set all pedestrian lanes to use the exclusive pedestrian group mask
         for (int i = 0; i < subLanes.Length; i++)
         {
             Entity subLane = subLanes[i].m_SubLane;
@@ -663,7 +673,8 @@ public class PredefinedPatternsProcessor
             {
                 continue;
             }
-            laneSignal.m_GroupMask = pedestrianGroupMask;
+            // Set pedestrian lanes to use only the exclusive pedestrian group
+            laneSignal.m_GroupMask = exclusivePedestrianGroupMask;
             Simulation.PatchedTrafficLightSystem.UpdateLaneSignal(trafficLights, ref laneSignal);
             job.m_LaneSignalData[subLane] = laneSignal;
         }

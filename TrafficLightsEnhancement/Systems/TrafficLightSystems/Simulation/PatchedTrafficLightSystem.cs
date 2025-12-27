@@ -1026,8 +1026,10 @@ public partial class PatchedTrafficLightSystem : GameSystemBase
                 {
                     // This lane's group is not active (red light)
                     // Check if turning on red is allowed (another group is active and in m_YieldGroupMask)
-                    // For Advanced Split Phasing, this allows kerbside turns on red when safe
-                    if (extraLaneSignal.m_YieldGroupMask != 0 && (extraLaneSignal.m_YieldGroupMask & num) != 0)
+                    // For Advanced Split Phasing and AlwaysGreenKerbsideTurn, this allows kerbside turns on red when safe
+                    // num is the currently active group mask
+                    // If the active group is in YieldGroupMask, allow turning on red (yield signal)
+                    if (extraLaneSignal.m_YieldGroupMask != 0 && num != 0 && (extraLaneSignal.m_YieldGroupMask & num) != 0)
                     {
                         // Another group that allows turning on red is active - allow yield (turn on red)
                         // This improves traffic flow by allowing safe turns on red
@@ -1052,8 +1054,8 @@ public partial class PatchedTrafficLightSystem : GameSystemBase
                     {
                         // This lane's group is not active (red light)
                         // Check if turning on red is allowed
-                        // For Advanced Split Phasing, this maintains yield signal during extension
-                        if (extraLaneSignal.m_YieldGroupMask != 0 && (extraLaneSignal.m_YieldGroupMask & num) != 0)
+                        // For Advanced Split Phasing and AlwaysGreenKerbsideTurn, this maintains yield signal during extension
+                        if (extraLaneSignal.m_YieldGroupMask != 0 && num != 0 && (extraLaneSignal.m_YieldGroupMask & num) != 0)
                         {
                             laneSignal.m_Signal = LaneSignalType.Yield;
                         }
@@ -1085,8 +1087,8 @@ public partial class PatchedTrafficLightSystem : GameSystemBase
                 {
                     // This lane's group is not active (red light) but can extend
                     // Check if turning on red is allowed
-                    // For Advanced Split Phasing, this maintains yield signal during extended state
-                    if (extraLaneSignal.m_YieldGroupMask != 0 && (extraLaneSignal.m_YieldGroupMask & num) != 0)
+                    // For Advanced Split Phasing and AlwaysGreenKerbsideTurn, this maintains yield signal during extended state
+                    if (extraLaneSignal.m_YieldGroupMask != 0 && num != 0 && (extraLaneSignal.m_YieldGroupMask & num) != 0)
                     {
                         laneSignal.m_Signal = LaneSignalType.Yield;
                     }

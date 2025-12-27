@@ -283,11 +283,57 @@ public struct CustomPhaseProcessor
             // Each lane should only use its own group, not all groups
             // Do this AFTER EdgeGroupMask is set up so signals are displayed correctly
             // This applies to both car lanes and track lanes (trams)
+            // Also need to properly set pedestrian lane group masks
             for (int i = 0; i < subLanes.Length; i++)
             {
                 Entity subLane = subLanes[i].m_SubLane;
                 if (!job.m_LaneSignalData.TryGetComponent(subLane, out LaneSignal laneSignal))
                 {
+                    continue;
+                }
+                
+                // Check if this is a pedestrian lane
+                bool isPedestrian = job.m_PedestrianLaneData.HasComponent(subLane);
+                
+                if (isPedestrian)
+                {
+                    // For pedestrian lanes, find which edge they belong to and set group mask accordingly
+                    // Pedestrians should have green when the corresponding edge group is NOT active
+                    // This ensures pedestrians wait when vehicles have green on their crossing
+                    ushort edgeGroup = 0;
+                    if (laneConnectionMap.TryGetValue(subLane, out var laneConnection))
+                    {
+                        Entity sourceEdge = laneConnection.m_SourceEdge;
+                        if (sourceEdge != Entity.Null)
+                        {
+                            // Try to get edge group from edgeActualGroupMap first
+                            if (!useEdgeToGroupMap && edgeActualGroupMap.TryGetValue(sourceEdge, out ushort actualGroup))
+                            {
+                                edgeGroup = actualGroup;
+                            }
+                            // Then try edgeToGroupMap
+                            else if (edgeToGroupMap.TryGetValue(sourceEdge, out ushort assignedGroup))
+                            {
+                                edgeGroup = assignedGroup;
+                            }
+                        }
+                    }
+                    
+                    // If we found the edge group, set pedestrian to all groups except that edge's group
+                    // Otherwise, use all groups except the first one as fallback
+                    if (edgeGroup != 0)
+                    {
+                        // Pedestrian should have green when this edge group is NOT active
+                        ushort pedestrianGroupMask = (ushort)(((1 << groupCount) - 1) & ~edgeGroup);
+                        laneSignal.m_GroupMask = pedestrianGroupMask;
+                    }
+                    else
+                    {
+                        // Fallback: use all groups except the first one
+                        laneSignal.m_GroupMask = (ushort)(((1 << groupCount) - 1) & ~1);
+                    }
+                    
+                    job.m_LaneSignalData[subLane] = laneSignal;
                     continue;
                 }
                 

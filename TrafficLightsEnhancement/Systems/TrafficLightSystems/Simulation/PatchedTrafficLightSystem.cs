@@ -138,15 +138,58 @@ public partial class PatchedTrafficLightSystem : GameSystemBase
 
                 CustomTrafficLights customTrafficLights = i < customTrafficLightsArray.Length ? customTrafficLightsArray[i] : new CustomTrafficLights();
 
-                if (customTrafficLights.GetPatternOnly() == CustomTrafficLights.Patterns.CustomPhase && i < customPhaseDataBufferAccessor.Length && (trafficLights.m_Flags & TrafficLightFlags.MoveableBridge) == 0)
+                // Advanced Split Phasing and Custom Phase both use CustomStateMachine for adaptive logic
+                bool usesCustomStateMachine = (customTrafficLights.GetPatternOnly() == CustomTrafficLights.Patterns.CustomPhase || 
+                                             customTrafficLights.GetPatternOnly() == CustomTrafficLights.Patterns.SplitPhasingAdvancedObsolete) &&
+                                             i < customPhaseDataBufferAccessor.Length && 
+                                             (trafficLights.m_Flags & TrafficLightFlags.MoveableBridge) == 0;
+                
+                if (usesCustomStateMachine)
                 {
                     DynamicBuffer<CustomPhaseData> customPhaseDataBuffer = customPhaseDataBufferAccessor[i];
-                    CustomStateMachine.CalculatePriority(this, subLanes, customPhaseDataBuffer);
-                    CustomStateMachine.CalculateFlow(this, unfilteredChunkIndex, subLanes, trafficLights, customPhaseDataBuffer);
-                    if (CustomStateMachine.UpdateTrafficLightState(ref trafficLights, ref customTrafficLights, customPhaseDataBuffer))
+                    
+                    // Safety check: ensure buffer is not empty before using CustomStateMachine
+                    if (customPhaseDataBuffer.Length > 0)
                     {
-                        UpdateLaneSignals(laneSignals, trafficLights);
-                        UpdateTrafficLightObjects(subObjects, trafficLights);
+                        // PERFORMANCE OPTIMIZATION: Only calculate priority and flow periodically, not every update
+                        // Calculate every 8 ticks (2 seconds) to significantly reduce CPU load
+                        // State changes will still trigger immediate calculation for accuracy
+                        bool shouldCalculate = (trafficLights.m_Timer & 7) == 0 || trafficLights.m_State == Game.Net.TrafficLightState.None || trafficLights.m_State == Game.Net.TrafficLightState.Beginning;
+                        
+                        if (shouldCalculate)
+                        {
+                            CustomStateMachine.CalculatePriority(this, subLanes, customPhaseDataBuffer);
+                            CustomStateMachine.CalculateFlow(this, unfilteredChunkIndex, subLanes, trafficLights, customPhaseDataBuffer);
+                        }
+                        
+                        if (CustomStateMachine.UpdateTrafficLightState(ref trafficLights, ref customTrafficLights, customPhaseDataBuffer, nativeArray[i], this))
+                        {
+                            UpdateLaneSignals(laneSignals, trafficLights);
+                            UpdateTrafficLightObjects(subObjects, trafficLights);
+                            
+                            // Recalculate if state changed to ensure fresh data for next decision
+                            if (!shouldCalculate)
+                            {
+                                CustomStateMachine.CalculatePriority(this, subLanes, customPhaseDataBuffer);
+                                CustomStateMachine.CalculateFlow(this, unfilteredChunkIndex, subLanes, trafficLights, customPhaseDataBuffer);
+                            }
+                        }
+                    }
+                    else
+                    {
+                        // Buffer is empty - fallback to vanilla system
+                        // This can happen if initialization hasn't completed yet
+                        if (UpdateTrafficLightState(laneSignals, moveableBridgeData, ref trafficLights, ref customTrafficLights))
+                        {
+                            UpdateLaneSignals(laneSignals, trafficLights);
+                            UpdateTrafficLightObjects(subObjects, trafficLights);
+                            if (entity != Entity.Null)
+                            {
+                                ref PointOfInterest valueRW = ref m_PointOfInterestData.GetRefRW(entity).ValueRW;
+                                UpdateMoveableBridge(trafficLights, m_TransformData[entity], moveableBridgeData, ref valueRW);
+                                m_CommandBuffer.AddComponent<EffectsUpdated>(unfilteredChunkIndex, nativeArray[i]);
+                            }
+                        }
                     }
                 }
                 else if (UpdateTrafficLightState(laneSignals, moveableBridgeData, ref trafficLights, ref customTrafficLights))
@@ -847,7 +890,11 @@ public partial class PatchedTrafficLightSystem : GameSystemBase
 
     public override int GetUpdateInterval(SystemUpdatePhase phase)
     {
-        return 4;
+        // PERFORMANCE: Update interval - higher value = less frequent updates = better performance
+        // 4 = updates every 16 frames (approximately every 0.27 seconds at 60 FPS)
+        // 8 = updates every 32 frames (approximately every 0.53 seconds at 60 FPS) - INCREASED for better performance
+        // Increased to 8 for better performance - signals will still be responsive enough
+        return 8;
     }
 
     [Preserve]
@@ -972,11 +1019,25 @@ public partial class PatchedTrafficLightSystem : GameSystemBase
             case Game.Net.TrafficLightState.Ongoing:
                 if ((laneSignal.m_GroupMask & num) != 0)
                 {
+                    // This lane's group is active - normal green or yield signal
                     laneSignal.m_Signal = goSignalType;
                 }
                 else
                 {
-                    laneSignal.m_Signal = LaneSignalType.Stop;
+                    // This lane's group is not active (red light)
+                    // Check if turning on red is allowed (another group is active and in m_YieldGroupMask)
+                    // For Advanced Split Phasing, this allows kerbside turns on red when safe
+                    if (extraLaneSignal.m_YieldGroupMask != 0 && (extraLaneSignal.m_YieldGroupMask & num) != 0)
+                    {
+                        // Another group that allows turning on red is active - allow yield (turn on red)
+                        // This improves traffic flow by allowing safe turns on red
+                        laneSignal.m_Signal = LaneSignalType.Yield;
+                    }
+                    else
+                    {
+                        // No turning on red allowed - stop
+                        laneSignal.m_Signal = LaneSignalType.Stop;
+                    }
                 }
 
                 break;
@@ -989,7 +1050,17 @@ public partial class PatchedTrafficLightSystem : GameSystemBase
                     }
                     else
                     {
-                        laneSignal.m_Signal = LaneSignalType.Stop;
+                        // This lane's group is not active (red light)
+                        // Check if turning on red is allowed
+                        // For Advanced Split Phasing, this maintains yield signal during extension
+                        if (extraLaneSignal.m_YieldGroupMask != 0 && (extraLaneSignal.m_YieldGroupMask & num) != 0)
+                        {
+                            laneSignal.m_Signal = LaneSignalType.Yield;
+                        }
+                        else
+                        {
+                            laneSignal.m_Signal = LaneSignalType.Stop;
+                        }
                     }
                 }
                 else if (laneSignal.m_Signal == goSignalType)
@@ -1009,6 +1080,20 @@ public partial class PatchedTrafficLightSystem : GameSystemBase
                 if ((laneSignal.m_Flags & LaneSignalFlags.CanExtend) != 0 && (laneSignal.m_GroupMask & num) != 0)
                 {
                     laneSignal.m_Signal = goSignalType;
+                }
+                else if ((laneSignal.m_Flags & LaneSignalFlags.CanExtend) != 0)
+                {
+                    // This lane's group is not active (red light) but can extend
+                    // Check if turning on red is allowed
+                    // For Advanced Split Phasing, this maintains yield signal during extended state
+                    if (extraLaneSignal.m_YieldGroupMask != 0 && (extraLaneSignal.m_YieldGroupMask & num) != 0)
+                    {
+                        laneSignal.m_Signal = LaneSignalType.Yield;
+                    }
+                    else
+                    {
+                        laneSignal.m_Signal = LaneSignalType.Stop;
+                    }
                 }
                 else
                 {

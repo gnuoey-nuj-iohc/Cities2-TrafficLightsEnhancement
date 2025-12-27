@@ -37,6 +37,9 @@ public struct ExtraTypeHandle
 
     public BufferTypeHandle<CustomPhaseData> m_CustomPhaseData;
 
+    [ReadOnly]
+    public ComponentLookup<GreenWaveData> m_GreenWaveData;
+
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public void AssignHandles(ref SystemState state)
     {
@@ -54,6 +57,7 @@ public struct ExtraTypeHandle
         m_EdgeGroupMask = state.GetBufferTypeHandle<EdgeGroupMask>();
         m_SubLaneGroupMask = state.GetBufferTypeHandle<SubLaneGroupMask>();
         m_CustomPhaseData = state.GetBufferTypeHandle<CustomPhaseData>();
+        m_GreenWaveData = state.GetComponentLookup<GreenWaveData>(true);
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -73,5 +77,6 @@ public struct ExtraTypeHandle
         m_EdgeGroupMask.Update(ref state);
         m_SubLaneGroupMask.Update(ref state);
         m_CustomPhaseData.Update(ref state);
+        m_GreenWaveData.Update(ref state);
     }
 }

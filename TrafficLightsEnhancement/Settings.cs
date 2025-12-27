@@ -41,11 +41,14 @@ public class Settings : ModSetting
 
         public bool m_DefaultExclusivePedestrian;
 
+        public bool m_DefaultAdvancedSplitPhasing;
+
         public Values(Settings settings)
         {
             m_DefaultSplitPhasing = settings.m_DefaultSplitPhasing;
             m_DefaultAlwaysGreenKerbsideTurn = settings.m_DefaultAlwaysGreenKerbsideTurn;
             m_DefaultExclusivePedestrian = settings.m_DefaultExclusivePedestrian;
+            m_DefaultAdvancedSplitPhasing = settings.m_DefaultAdvancedSplitPhasing;
         }
     }
 
@@ -88,6 +91,23 @@ public class Settings : ModSetting
     [SettingsUIHideByCondition(typeof(Settings), "IsTrue")]
     public bool m_CompatibilityMode { get; private set; }
 
+    [SettingsUISection(kTabGeneral, kGroupDefault)]
+    [SettingsUIButton]
+    [SettingsUIConfirmation(null, null)]
+    [SettingsUIDisableByCondition(typeof(Settings), "IsNotInGame")]
+    [SettingsUIHideByCondition(typeof(Settings), "IsCompatibilityMode")]
+    public bool m_ResetAgents
+    {
+        get
+        {
+            return false;
+        }
+        set
+        {
+            ResetAgents();
+        }
+    }
+
     [SettingsUISection(kTabGeneral, kGroupVersion)]
     public string m_ReleaseChannel => IsNotCanary() ? "Alpha" : "Canary";
 
@@ -108,6 +128,27 @@ public class Settings : ModSetting
     [SettingsUISection(kTabGeneral, kGroupDefault)]
     [SettingsUIHideByCondition(typeof(Settings), "IsCompatibilityMode")]
     public bool m_DefaultExclusivePedestrian { get; set; }
+
+    [SettingsUISection(kTabGeneral, kGroupDefault)]
+    [SettingsUIHideByCondition(typeof(Settings), "IsCompatibilityMode")]
+    public bool m_DefaultAdvancedSplitPhasing
+    {
+        get
+        {
+            return m_DefaultAdvancedSplitPhasingValue;
+        }
+        set
+        {
+            m_DefaultAdvancedSplitPhasingValue = value;
+            if (!IsNotInGame() && Mod.m_World != null)
+            {
+                EntityQuery entityQuery = Mod.m_World.EntityManager.CreateEntityQuery(ComponentType.ReadOnly<Game.Net.TrafficLights>());
+                Mod.m_World.EntityManager.AddComponent<Game.Common.Updated>(entityQuery);
+            }
+        }
+    }
+
+    private bool m_DefaultAdvancedSplitPhasingValue;
 
     [SettingsUISection(kTabGeneral, kGroupDefault)]
     [SettingsUIButton]
@@ -178,6 +219,7 @@ public class Settings : ModSetting
         m_DefaultSplitPhasing = false;
         m_DefaultAlwaysGreenKerbsideTurn = false;
         m_DefaultExclusivePedestrian = false;
+        m_DefaultAdvancedSplitPhasingValue = false;
         m_SuppressCanaryWarningVersion = "";
     }
 
@@ -271,6 +313,27 @@ public class Settings : ModSetting
             }
         ];
         return list;
+    }
+
+    private void ResetAgents()
+    {
+        if (IsNotInGame() || Mod.m_World == null)
+        {
+            return;
+        }
+
+        EntityManager entityManager = Mod.m_World.EntityManager;
+        // Check if world is valid instead of EntityManager.IsCreated (which doesn't exist)
+        if (Mod.m_World == null || !Mod.m_World.IsCreated)
+        {
+            return;
+        }
+
+        EntityQuery vehicleQuery = entityManager.CreateEntityQuery(ComponentType.ReadOnly<Game.Vehicles.Vehicle>());
+        EntityQuery citizenQuery = entityManager.CreateEntityQuery(ComponentType.ReadOnly<Game.Citizens.Citizen>());
+
+        entityManager.AddComponent<Game.Common.Deleted>(vehicleQuery);
+        entityManager.AddComponent<Game.Common.Deleted>(citizenQuery);
     }
 
     public bool IsNotInGame()

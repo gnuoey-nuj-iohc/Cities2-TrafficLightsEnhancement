@@ -12,15 +12,14 @@ public class PredefinedPatternsProcessor
 {
     public static bool IsValidPattern(NativeArray<EdgeInfo> edgeInfoArray, CustomTrafficLights.Patterns pattern)
     {
-        if (HasTrainTrack(edgeInfoArray))
-        {
-            return false;
-        }
-
         switch ((uint)pattern & 0xFFFF)
         {
             case (uint)CustomTrafficLights.Patterns.SplitPhasing:
             {
+                if (HasTrainTrack(edgeInfoArray))
+                {
+                    return false;
+                }
                 if (edgeInfoArray.Length > 7)
                 {
                     return false;
@@ -30,7 +29,10 @@ public class PredefinedPatternsProcessor
 
             case (uint)CustomTrafficLights.Patterns.SplitPhasingAdvancedObsolete:
             {
-                return false;
+                // Advanced Split Phasing uses CustomPhaseProcessor which can handle any number of edges
+                // It can also handle train tracks, so we allow it even with tracks
+                // No limit on edge count for advanced split phasing
+                return true;
             }
 
             case (uint)CustomTrafficLights.Patterns.ProtectedCentreTurn:
@@ -56,6 +58,11 @@ public class PredefinedPatternsProcessor
 
             default:
             {
+                // For other patterns, check if train tracks are present
+                if (HasTrainTrack(edgeInfoArray))
+                {
+                    return false;
+                }
                 return true;
             }
         }
@@ -653,12 +660,16 @@ public class PredefinedPatternsProcessor
                 continue;
             }
 
-            ushort groupMask = (ushort)(~pedestrianGroupMask & ~laneSignal.m_GroupMask & ((1 << groupCount) - 1));
-            laneSignal.m_GroupMask |= groupMask;
+            // Calculate which groups allow turning on red (all groups except pedestrian and this lane's own group)
+            ushort allowTurningOnRedGroupMask = (ushort)(~pedestrianGroupMask & ~laneSignal.m_GroupMask & ((1 << groupCount) - 1));
+            
+            // Do NOT add allowTurningOnRedGroupMask to laneSignal.m_GroupMask
+            // The lane should only be green when its own group is active
+            // allowTurningOnRedGroupMask is used to determine when to allow turning on red (yield)
 
             ExtraLaneSignal extraLaneSignal = new();
-            extraLaneSignal.m_YieldGroupMask = groupMask;
-            extraLaneSignal.m_IgnorePriorityGroupMask = groupMask;
+            extraLaneSignal.m_YieldGroupMask = allowTurningOnRedGroupMask;
+            extraLaneSignal.m_IgnorePriorityGroupMask = allowTurningOnRedGroupMask;
 
             Simulation.PatchedTrafficLightSystem.UpdateLaneSignal(trafficLights, ref laneSignal, ref extraLaneSignal);
             job.m_LaneSignalData[subLane] = laneSignal;

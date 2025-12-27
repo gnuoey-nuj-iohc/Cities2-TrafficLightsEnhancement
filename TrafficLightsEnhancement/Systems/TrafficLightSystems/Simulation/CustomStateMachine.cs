@@ -1,5 +1,6 @@
 using C2VM.TrafficLightsEnhancement.Components;
 using Game.Net;
+using Unity.Collections;
 using Unity.Entities;
 using Unity.Mathematics;
 
@@ -9,21 +10,51 @@ namespace C2VM.TrafficLightsEnhancement.Systems.TrafficLightSystems.Simulation
     {
         public static bool UpdateTrafficLightState(ref TrafficLights trafficLights, ref CustomTrafficLights customTrafficLights, DynamicBuffer<CustomPhaseData> customPhaseDataBuffer)
         {
+            return UpdateTrafficLightState(ref trafficLights, ref customTrafficLights, customPhaseDataBuffer, Entity.Null, null);
+        }
+
+        public static bool UpdateTrafficLightState(ref TrafficLights trafficLights, ref CustomTrafficLights customTrafficLights, DynamicBuffer<CustomPhaseData> customPhaseDataBuffer, Entity currentNode, PatchedTrafficLightSystem.UpdateTrafficLightsJob? job)
+        {
             if (trafficLights.m_State == TrafficLightState.None || trafficLights.m_State == TrafficLightState.Extending || trafficLights.m_State == TrafficLightState.Extended)
             {
+                // Safety check: ensure buffer is not empty
+                if (customPhaseDataBuffer.Length == 0)
+                {
+                    // Buffer is empty, cannot proceed - return false to let vanilla system handle it
+                    return false;
+                }
+                
                 trafficLights.m_State = TrafficLightState.Beginning;
                 trafficLights.m_CurrentSignalGroup = 0;
-                trafficLights.m_NextSignalGroup = GetNextSignalGroup(trafficLights.m_CurrentSignalGroup, customPhaseDataBuffer, customTrafficLights, out _);
+                trafficLights.m_NextSignalGroup = GetNextSignalGroup(trafficLights.m_CurrentSignalGroup, customPhaseDataBuffer, customTrafficLights, currentNode, job, out _);
                 trafficLights.m_Timer = 0;
                 customTrafficLights.m_Timer = 0;
+                
+                // Safety check: if GetNextSignalGroup returned 0, try again with default fallback
+                if (trafficLights.m_NextSignalGroup <= 0)
+                {
+                    trafficLights.m_NextSignalGroup = 1; // Default to first phase as fallback
+                }
                 return true;
             }
             else if (trafficLights.m_State == TrafficLightState.Beginning)
             {
-                if (trafficLights.m_NextSignalGroup <= 0)
+                // Safety check: ensure buffer is not empty
+                if (customPhaseDataBuffer.Length == 0)
                 {
-                    trafficLights.m_State = TrafficLightState.None; // roll a new group
-                    return true;
+                    trafficLights.m_State = TrafficLightState.None;
+                    return false; // Let vanilla system handle it
+                }
+                
+                if (trafficLights.m_NextSignalGroup <= 0 || trafficLights.m_NextSignalGroup > customPhaseDataBuffer.Length)
+                {
+                    // Invalid group, try to get a valid one
+                    trafficLights.m_NextSignalGroup = GetNextSignalGroup(trafficLights.m_CurrentSignalGroup, customPhaseDataBuffer, customTrafficLights, currentNode, job, out _);
+                    if (trafficLights.m_NextSignalGroup <= 0)
+                    {
+                        trafficLights.m_State = TrafficLightState.None; // roll a new group
+                        return true;
+                    }
                 }
                 trafficLights.m_State = TrafficLightState.Ongoing;
                 trafficLights.m_CurrentSignalGroup = trafficLights.m_NextSignalGroup;
@@ -107,8 +138,78 @@ namespace C2VM.TrafficLightsEnhancement.Systems.TrafficLightSystems.Simulation
                     preferChange = true;
                 }
                 customPhaseDataBuffer[currentSignalIndex] = phase;
-                byte nextGroup = GetNextSignalGroup(trafficLights.m_CurrentSignalGroup, customPhaseDataBuffer, customTrafficLights, out var linked);
-                if (preferChange && nextGroup != trafficLights.m_CurrentSignalGroup)
+                byte nextGroup = GetNextSignalGroup(trafficLights.m_CurrentSignalGroup, customPhaseDataBuffer, customTrafficLights, currentNode, job, out var linked);
+                
+                // Force change if maximum duration exceeded, even if nextGroup is the same
+                // This prevents a single direction from blocking others indefinitely
+                // This is critical for Advanced Split Phasing to ensure fair signal rotation
+                bool forceChange = false;
+                if (customTrafficLights.m_Timer >= phase.m_MaximumDuration)
+                {
+                    forceChange = true;
+                    // If nextGroup is the same, find the next available group
+                    // This ensures that even if the current group has highest priority,
+                    // it will be forced to change after maximum duration
+                    if (nextGroup == trafficLights.m_CurrentSignalGroup)
+                    {
+                        // Find the next group with highest priority or longest waiting time
+                        // Prioritize groups that haven't run recently (higher m_TurnsSinceLastRun)
+                        int bestGroup = 0;
+                        int bestPriority = -1;
+                        float bestWaiting = -1;
+                        int bestTurnsSinceLastRun = -1;
+                        
+                        for (int i = 0; i < customPhaseDataBuffer.Length; i++)
+                        {
+                            if (i + 1 == trafficLights.m_CurrentSignalGroup)
+                            {
+                                continue; // Skip current group
+                            }
+                            CustomPhaseData otherPhase = customPhaseDataBuffer[i];
+                            float weightedWaiting = otherPhase.m_WeightedWaiting;
+                            
+                            // Prioritize groups that haven't run in a while
+                            // This ensures fair rotation even when priorities are similar
+                            bool isBetter = false;
+                            if (otherPhase.m_TurnsSinceLastRun > bestTurnsSinceLastRun)
+                            {
+                                isBetter = true;
+                            }
+                            else if (otherPhase.m_TurnsSinceLastRun == bestTurnsSinceLastRun)
+                            {
+                                if (otherPhase.m_Priority > bestPriority)
+                                {
+                                    isBetter = true;
+                                }
+                                else if (otherPhase.m_Priority == bestPriority && weightedWaiting > bestWaiting)
+                                {
+                                    isBetter = true;
+                                }
+                            }
+                            
+                            if (isBetter)
+                            {
+                                bestGroup = i + 1;
+                                bestPriority = otherPhase.m_Priority;
+                                bestWaiting = weightedWaiting;
+                                bestTurnsSinceLastRun = otherPhase.m_TurnsSinceLastRun;
+                            }
+                        }
+                        
+                        if (bestGroup > 0)
+                        {
+                            nextGroup = (byte)bestGroup;
+                        }
+                        else if (customPhaseDataBuffer.Length > 1)
+                        {
+                            // Fallback: cycle to next group to ensure rotation
+                            // This guarantees that signals will change even if all groups have same priority
+                            nextGroup = (byte)((trafficLights.m_CurrentSignalGroup % customPhaseDataBuffer.Length) + 1);
+                        }
+                    }
+                }
+                
+                if ((preferChange || forceChange) && nextGroup != trafficLights.m_CurrentSignalGroup)
                 {
                     trafficLights.m_State = TrafficLightState.Ending;
                     trafficLights.m_NextSignalGroup = nextGroup;
@@ -143,6 +244,12 @@ namespace C2VM.TrafficLightsEnhancement.Systems.TrafficLightSystems.Simulation
 
         public static void CalculateFlow(PatchedTrafficLightSystem.UpdateTrafficLightsJob job, int unfilteredChunkIndex, DynamicBuffer<SubLane> subLaneBuffer, TrafficLights trafficLights, DynamicBuffer<CustomPhaseData> customPhaseDataBuffer)
         {
+            // PERFORMANCE: Early exit if no active signal group
+            if (trafficLights.m_CurrentSignalGroup == 0 || trafficLights.m_CurrentSignalGroup > customPhaseDataBuffer.Length)
+            {
+                return;
+            }
+            
             float4 timeFactors = job.m_ExtraData.m_TimeFactors * 0.125f;
             for (int i = 0; i < customPhaseDataBuffer.Length; i++)
             {
@@ -152,6 +259,9 @@ namespace C2VM.TrafficLightsEnhancement.Systems.TrafficLightSystems.Simulation
                 customPhaseData.m_CarFlow.x = 0f;
                 customPhaseDataBuffer[i] = customPhaseData;
             }
+            
+            // PERFORMANCE: Only process lanes that belong to current active group
+            int currentGroupMask = 1 << (trafficLights.m_CurrentSignalGroup - 1);
             foreach (var subLane in subLaneBuffer)
             {
                 Entity subLaneEntity = subLane.m_SubLane;
@@ -169,11 +279,13 @@ namespace C2VM.TrafficLightsEnhancement.Systems.TrafficLightSystems.Simulation
                 {
                     continue;
                 }
-                if (!job.m_ExtraTypeHandle.m_LaneFlow.TryGetComponent(subLaneEntity, out var laneFlow))
+                // PERFORMANCE: Check group mask early before expensive component lookups
+                if ((laneSignal.m_GroupMask & currentGroupMask) == 0)
                 {
                     continue;
                 }
-                if ((laneSignal.m_GroupMask & (1 << trafficLights.m_CurrentSignalGroup - 1)) == 0)
+                
+                if (!job.m_ExtraTypeHandle.m_LaneFlow.TryGetComponent(subLaneEntity, out var laneFlow))
                 {
                     continue;
                 }
@@ -316,31 +428,159 @@ namespace C2VM.TrafficLightsEnhancement.Systems.TrafficLightSystems.Simulation
 
         public static byte GetNextSignalGroup(byte currentGroup, DynamicBuffer<CustomPhaseData> customPhaseDataBuffer, CustomTrafficLights customTrafficLights, out bool linked)
         {
+            return GetNextSignalGroup(currentGroup, customPhaseDataBuffer, customTrafficLights, Entity.Null, null, out linked);
+        }
+
+        public static byte GetNextSignalGroup(byte currentGroup, DynamicBuffer<CustomPhaseData> customPhaseDataBuffer, CustomTrafficLights customTrafficLights, Entity currentNode, PatchedTrafficLightSystem.UpdateTrafficLightsJob? job, out bool linked)
+        {
             linked = false;
             byte nextGroup = 0;
             int maxPriority = -1;
             float maxWaiting = -1;
+            
+            // Safety check: if buffer is empty, return 0 (this should be handled by caller)
+            if (customPhaseDataBuffer.Length == 0)
+            {
+                return 0;
+            }
+            
             if (customTrafficLights.m_ManualSignalGroup > 0 && customTrafficLights.m_ManualSignalGroup - 1 < customPhaseDataBuffer.Length)
             {
                 return customTrafficLights.m_ManualSignalGroup;
             }
+            
+            // Green Wave coordination: check adjacent intersections
+            // PERFORMANCE: Skip green wave calculation if no manual override and buffer is small
+            // Green wave calculation can be expensive, so skip it when not needed
+            NativeHashMap<byte, float> greenWaveBonuses = default;
+            bool hasGreenWaveData = false;
+            int greenWaveActiveCount = 0;
+            
+            // PERFORMANCE OPTIMIZATION: Only check green wave if there are multiple phases
+            // Single phase intersections don't benefit from green wave coordination
+            bool shouldCheckGreenWave = customPhaseDataBuffer.Length > 1 && job.HasValue && currentNode != Entity.Null;
+            
+            if (shouldCheckGreenWave)
+            {
+                var jobValue = job.Value;
+                if (jobValue.m_ExtraTypeHandle.m_GreenWaveData.TryGetComponent(currentNode, out var greenWaveData) && greenWaveData.m_Enabled)
+                {
+                    if (jobValue.m_ExtraTypeHandle.m_AdjacentIntersections.HasBuffer(currentNode))
+                    {
+                        var adjacentIntersections = jobValue.m_ExtraTypeHandle.m_AdjacentIntersections[currentNode];
+                        // Only allocate if we have adjacent intersections
+                        if (adjacentIntersections.Length > 0)
+                        {
+                            greenWaveBonuses = new NativeHashMap<byte, float>(customPhaseDataBuffer.Length, Allocator.Temp);
+                            hasGreenWaveData = true;
+                            
+                            for (int adjIdx = 0; adjIdx < adjacentIntersections.Length; adjIdx++)
+                            {
+                                var adjacent = adjacentIntersections[adjIdx];
+                                if (adjacent.m_NodeEntity == Entity.Null)
+                                {
+                                    continue;
+                                }
+                                
+                                // Check if adjacent intersection has traffic lights
+                                if (!jobValue.m_ExtraTypeHandle.m_TrafficLights.TryGetComponent(adjacent.m_NodeEntity, out var adjacentTrafficLights))
+                                {
+                                    continue;
+                                }
+                                
+                                // Check if adjacent intersection is in a state that would benefit from coordination
+                                // If adjacent is about to turn green (in Beginning state or just started), give bonus to matching phase
+                                if (adjacentTrafficLights.m_State == TrafficLightState.Beginning || 
+                                    (adjacentTrafficLights.m_State == TrafficLightState.Ongoing && adjacentTrafficLights.m_Timer < adjacent.m_DelayTicks))
+                                {
+                                    byte adjacentGroup = adjacentTrafficLights.m_CurrentSignalGroup;
+                                    if (adjacentGroup > 0 && adjacentGroup <= customPhaseDataBuffer.Length)
+                                    {
+                                        // Calculate bonus based on how close the timing is
+                                        float timingBonus = 1.0f;
+                                        if (adjacentTrafficLights.m_State == TrafficLightState.Ongoing)
+                                        {
+                                            // The closer we are to the delay time, the higher the bonus
+                                            float timeDiff = math.abs(adjacentTrafficLights.m_Timer - adjacent.m_DelayTicks);
+                                            timingBonus = math.max(0.1f, 1.0f - (timeDiff / (float)adjacent.m_DelayTicks));
+                                        }
+                                        
+                                        // Add bonus to the matching phase group
+                                        if (greenWaveBonuses.TryGetValue(adjacentGroup, out float existingBonus))
+                                        {
+                                            greenWaveBonuses[adjacentGroup] = math.max(existingBonus, timingBonus);
+                                        }
+                                        else
+                                        {
+                                            greenWaveBonuses[adjacentGroup] = timingBonus;
+                                        }
+                                        greenWaveActiveCount++;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            
+            // Debug: Log Green Wave activity (only occasionally to avoid spam)
+            // Uncomment the line below to enable debug logging
+            // if (greenWaveActiveCount > 0) System.Console.WriteLine($"[Green Wave] Node {currentNode.Index} coordinating with {greenWaveActiveCount} adjacent intersection(s)");
+            
+            // Note: Current phase duration checking is handled in the main update loop
+            // This section is for phase selection optimization
+            
             for (int i = 0; i < customPhaseDataBuffer.Length; i++)
             {
                 CustomPhaseData phase = customPhaseDataBuffer[i];
-                float weightedWaiting = ((float)phase.TotalLaneOccupied()) * phase.m_LaneOccupiedMultiplier * math.pow((float)phase.m_TurnsSinceLastRun / (float)customPhaseDataBuffer.Length, phase.m_IntervalExponent);
-                if (phase.m_Priority > maxPriority)
+                byte phaseGroup = (byte)(i + 1);
+                
+                // Penalize current group if it's been active (indicated by m_TurnsSinceLastRun == 0)
+                // This prevents the same group from being selected again immediately
+                // For Advanced Split Phasing, this is critical to ensure fair rotation
+                float priorityPenalty = 0f;
+                if (currentGroup > 0 && phaseGroup == currentGroup && phase.m_TurnsSinceLastRun == 0)
                 {
-                    nextGroup = (byte)(i + 1);
-                    maxPriority = phase.m_Priority;
+                    // Reduce priority for current group to allow others to have a chance
+                    // This helps prevent one direction from blocking others
+                    // Use a more significant penalty to ensure rotation
+                    priorityPenalty = 2f; // Subtract 2 from priority (increased from 1f)
+                }
+                
+                // Calculate weighted waiting time
+                // This considers lane occupancy, waiting time, and how long since last run
+                float weightedWaiting = ((float)phase.TotalLaneOccupied()) * phase.m_LaneOccupiedMultiplier * math.pow((float)phase.m_TurnsSinceLastRun / (float)customPhaseDataBuffer.Length, phase.m_IntervalExponent);
+                
+                // Apply Green Wave bonus if available
+                // Green Wave coordination helps synchronize adjacent intersections
+                if (hasGreenWaveData && greenWaveBonuses.TryGetValue(phaseGroup, out float bonus))
+                {
+                    weightedWaiting *= (1.0f + bonus * 0.5f); // 50% bonus for green wave coordination
+                }
+                
+                // Apply priority with penalty
+                // The penalty ensures that even high-priority groups will eventually yield
+                int effectivePriority = phase.m_Priority - (int)priorityPenalty;
+                
+                if (effectivePriority > maxPriority)
+                {
+                    nextGroup = phaseGroup;
+                    maxPriority = effectivePriority;
                     maxWaiting = weightedWaiting;
                 }
-                else if (phase.m_Priority == maxPriority && weightedWaiting > maxWaiting)
+                else if (effectivePriority == maxPriority && weightedWaiting > maxWaiting)
                 {
-                    nextGroup = (byte)(i + 1);
+                    nextGroup = phaseGroup;
                     maxWaiting = weightedWaiting;
                 }
                 phase.m_WeightedWaiting = weightedWaiting;
                 customPhaseDataBuffer[i] = phase;
+            }
+            
+            // Only dispose if we actually allocated it
+            if (hasGreenWaveData)
+            {
+                greenWaveBonuses.Dispose();
             }
 
             int linkedPriority = -1;
@@ -378,6 +618,28 @@ namespace C2VM.TrafficLightsEnhancement.Systems.TrafficLightSystems.Simulation
                     nextGroup = (byte)(i + 1);
                 }
             }
+            
+            // Safety fallback: if no group was selected (nextGroup is 0), select the first available phase
+            // This prevents the traffic light from getting stuck in None state
+            if (nextGroup == 0 && customPhaseDataBuffer.Length > 0)
+            {
+                // Find the first phase with any priority or lane occupancy
+                for (int i = 0; i < customPhaseDataBuffer.Length; i++)
+                {
+                    CustomPhaseData phase = customPhaseDataBuffer[i];
+                    if (phase.m_Priority > 0 || phase.TotalLaneOccupied() > 0)
+                    {
+                        nextGroup = (byte)(i + 1);
+                        break;
+                    }
+                }
+                // If still no group found, default to first phase
+                if (nextGroup == 0)
+                {
+                    nextGroup = 1;
+                }
+            }
+            
             return nextGroup;
         }
 

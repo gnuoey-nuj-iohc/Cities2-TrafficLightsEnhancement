@@ -32,6 +32,15 @@ public struct ExtraTypeHandle
     [ReadOnly]
     public ComponentLookup<PedestrianLane> m_PedestrianLane;
 
+    [ReadOnly]
+    public ComponentLookup<GreenWaveData> m_GreenWaveData;
+
+    [ReadOnly]
+    public BufferLookup<AdjacentIntersection> m_AdjacentIntersections;
+
+    [ReadOnly]
+    public ComponentLookup<TrafficLights> m_TrafficLights;
+
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public void AssignHandles(ref SystemState state)
     {
@@ -44,6 +53,9 @@ public struct ExtraTypeHandle
         m_CarLane = state.GetComponentLookup<CarLane>(isReadOnly: true);
         m_TrackLane = state.GetComponentLookup<TrackLane>(isReadOnly: true);
         m_PedestrianLane = state.GetComponentLookup<PedestrianLane>(isReadOnly: true);
+        m_GreenWaveData = state.GetComponentLookup<GreenWaveData>(isReadOnly: true);
+        m_AdjacentIntersections = state.GetBufferLookup<AdjacentIntersection>(isReadOnly: true);
+        m_TrafficLights = state.GetComponentLookup<TrafficLights>(isReadOnly: true);
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -58,6 +70,9 @@ public struct ExtraTypeHandle
         m_CarLane.Update(ref state);
         m_TrackLane.Update(ref state);
         m_PedestrianLane.Update(ref state);
+        m_GreenWaveData.Update(ref state);
+        m_AdjacentIntersections.Update(ref state);
+        m_TrafficLights.Update(ref state);
         return this;
     }
 }

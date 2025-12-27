@@ -209,19 +209,25 @@ public partial class PatchedTrafficLightInitializationSystem : Game.GameSystemBa
                     trafficLights.m_Flags &= ~(TrafficLightFlags.MoveableBridge | TrafficLightFlags.IsSubNode);
                 }
 
-                CustomTrafficLights customTrafficLights = i < customTrafficLightsArray.Length ? customTrafficLights = customTrafficLightsArray[i] : new CustomTrafficLights(CustomTrafficLights.Patterns.ModDefault);
+                CustomTrafficLights customTrafficLights = i < customTrafficLightsArray.Length ? customTrafficLightsArray[i] : new CustomTrafficLights(CustomTrafficLights.Patterns.ModDefault);
+                bool needsCustomPhaseBuffers = false;
                 if (customTrafficLights.GetPatternOnly() == CustomTrafficLights.Patterns.ModDefault)
                 {
                     uint defaultPattern = (uint) CustomTrafficLights.Patterns.Vanilla;
-                    if (m_Settings.m_DefaultSplitPhasing)
+                    if (m_Settings.m_DefaultAdvancedSplitPhasing)
+                    {
+                        defaultPattern = (uint) CustomTrafficLights.Patterns.SplitPhasingAdvancedObsolete;
+                        needsCustomPhaseBuffers = true;
+                    }
+                    else if (m_Settings.m_DefaultSplitPhasing)
                     {
                         defaultPattern = (uint) CustomTrafficLights.Patterns.SplitPhasing;
                     }
-                    if (m_Settings.m_DefaultAlwaysGreenKerbsideTurn)
+                    if (m_Settings.m_DefaultAlwaysGreenKerbsideTurn && !m_Settings.m_DefaultAdvancedSplitPhasing)
                     {
                         defaultPattern |= (uint) CustomTrafficLights.Patterns.AlwaysGreenKerbsideTurn;
                     }
-                    if (m_Settings.m_DefaultExclusivePedestrian)
+                    if (m_Settings.m_DefaultExclusivePedestrian && !m_Settings.m_DefaultAdvancedSplitPhasing)
                     {
                         defaultPattern |= (uint) CustomTrafficLights.Patterns.ExclusivePedestrian;
                     }
@@ -232,19 +238,80 @@ public partial class PatchedTrafficLightInitializationSystem : Game.GameSystemBa
                 if ((trafficLights.m_Flags & TrafficLightFlags.MoveableBridge) != 0)
                 {
                     customTrafficLights.SetPattern(CustomTrafficLights.Patterns.Vanilla);
+                    needsCustomPhaseBuffers = false;
                 }
 
                 PredefinedPatternsProcessor.ResetExtraLaneSignal(ref this, subLanes, ref trafficLights);
-                if (customTrafficLights.GetPatternOnly() == CustomTrafficLights.Patterns.CustomPhase && i < edgeGroupMaskAccessor.Length && i < subLaneGroupMaskAccessor.Length && i < customPhaseDataAccessor.Length)
+                if (customTrafficLights.GetPatternOnly() == CustomTrafficLights.Patterns.SplitPhasingAdvancedObsolete || needsCustomPhaseBuffers)
                 {
-                    CustomPhaseUtils.ValidateBuffer(ref this, entityArray[i], subLanes, connectedEdgeAccessor[i], edgeGroupMaskAccessor[i], subLaneGroupMaskAccessor[i], m_ExtraTypeHandle.m_SubLane);
-                    CustomPhaseProcessor.ProcessLanes(ref this, unfilteredChunkIndex, entityArray[i], connectedEdgeAccessor[i], subLanes, out groupCount, ref trafficLights, ref customTrafficLights, edgeGroupMaskAccessor[i], subLaneGroupMaskAccessor[i], customPhaseDataAccessor[i]);
+                    // Advanced Split Phasing uses CustomPhaseProcessor for adaptive logic
+                    // Check if buffers exist
+                    bool hasEdgeGroupMask = i < edgeGroupMaskAccessor.Length;
+                    bool hasSubLaneGroupMask = i < subLaneGroupMaskAccessor.Length;
+                    bool hasCustomPhaseData = i < customPhaseDataAccessor.Length;
+                    
+                    if (!hasEdgeGroupMask || !hasSubLaneGroupMask || !hasCustomPhaseData)
+                    {
+                        // Add buffers if they don't exist - they will be available on next update
+                        if (!hasEdgeGroupMask)
+                        {
+                            m_CommandBuffer.AddBuffer<EdgeGroupMask>(unfilteredChunkIndex, entityArray[i]);
+                        }
+                        if (!hasSubLaneGroupMask)
+                        {
+                            m_CommandBuffer.AddBuffer<SubLaneGroupMask>(unfilteredChunkIndex, entityArray[i]);
+                        }
+                        if (!hasCustomPhaseData)
+                        {
+                            m_CommandBuffer.AddBuffer<CustomPhaseData>(unfilteredChunkIndex, entityArray[i]);
+                        }
+                        // Keep SplitPhasingAdvancedObsolete pattern and mark for update - will be processed on next update when buffers are ready
+                        m_CommandBuffer.AddComponent<Game.Common.Updated>(unfilteredChunkIndex, entityArray[i]);
+                        customTrafficLights.SetPattern(CustomTrafficLights.Patterns.SplitPhasingAdvancedObsolete);
+                        // Use Vanilla temporarily until buffers are ready
+
+                        FillLaneBuffers(subLanes, vehicleLanes, pedestrianLanes);
+                        if (flag2)
+                        {
+                            ProcessMoveableBridgeLanes(entity, vehicleLanes, pedestrianLanes, groups, subLanes, moveableBridgeData, isSubNode, ref groupIndexMap, out groupCount);
+                        }
+                        else
+                        {
+                            ProcessVehicleLaneGroups(vehicleLanes, groups, flag, out groupCount);
+                            ProcessPedestrianLaneGroups(subLanes, pedestrianLanes, groups, flag, ref groupCount);
+                        }
+                        InitializeTrafficLights(subLanes, groups, groupCount, flag, flag2, ref trafficLights);
+                        groups.Clear();
+                    }
+                    else if (customTrafficLights.GetPatternOnly() == CustomTrafficLights.Patterns.SplitPhasingAdvancedObsolete)
+                    {
+                        CustomPhaseUtils.ValidateBuffer(ref this, entityArray[i], subLanes, connectedEdgeAccessor[i], edgeGroupMaskAccessor[i], subLaneGroupMaskAccessor[i], m_ExtraTypeHandle.m_SubLane);
+                        
+                        // For existing traffic lights, clear buffers if pattern was changed to ensure clean initialization
+                        // This prevents conflicts from previous pattern data
+                        var edgeGroupMaskBuffer = edgeGroupMaskAccessor[i];
+                        var subLaneGroupMaskBuffer = subLaneGroupMaskAccessor[i];
+                        var customPhaseDataBuffer = customPhaseDataAccessor[i];
+                        
+                        // Clear buffers to ensure clean state for Advanced Split Phasing
+                        // This is especially important when switching from other patterns
+                        edgeGroupMaskBuffer.Clear();
+                        subLaneGroupMaskBuffer.Clear();
+                        customPhaseDataBuffer.Clear();
+                        
+                        // CustomPhaseProcessor will automatically create groups and CustomPhaseData if buffer is empty (like "Advanced Split Phasing")
+                        CustomPhaseProcessor.ProcessLanes(ref this, unfilteredChunkIndex, entityArray[i], connectedEdgeAccessor[i], subLanes, out groupCount, ref trafficLights, ref customTrafficLights, edgeGroupMaskAccessor[i], subLaneGroupMaskAccessor[i], customPhaseDataAccessor[i]);
+                    }
                 }
-                else
+                
+                // Only process non-Advanced patterns if Advanced wasn't already processed
+                if (customTrafficLights.GetPatternOnly() != CustomTrafficLights.Patterns.SplitPhasingAdvancedObsolete && !needsCustomPhaseBuffers)
                 {
                     var edgeInfoArray = NodeUtils.GetEdgeInfoList(Allocator.Temp, entityArray[i], ref this, subLanes, connectedEdgeAccessor[i], edgeGroupMaskAccessor[i], subLaneGroupMaskAccessor[i]).AsArray();
                     var pattern = customTrafficLights.GetPattern();
-                    if (NodeUtils.HasTrainTrack(edgeInfoArray) || !PredefinedPatternsProcessor.IsValidPattern(edgeInfoArray, pattern))
+                    // Advanced Split Phasing can handle train tracks, so don't check HasTrainTrack for it
+                    bool hasTrainTrack = NodeUtils.HasTrainTrack(edgeInfoArray);
+                    if ((hasTrainTrack && customTrafficLights.GetPatternOnly() != CustomTrafficLights.Patterns.SplitPhasingAdvancedObsolete) || !PredefinedPatternsProcessor.IsValidPattern(edgeInfoArray, pattern))
                     {
                         pattern = CustomTrafficLights.Patterns.Vanilla;
                         customTrafficLights.SetPattern(pattern);
@@ -252,6 +319,12 @@ public partial class PatchedTrafficLightInitializationSystem : Game.GameSystemBa
                     if (customTrafficLights.GetPatternOnly() == CustomTrafficLights.Patterns.SplitPhasing)
                     {
                         PredefinedPatternsProcessor.SetupSplitPhasing(ref this, connectedEdgeAccessor[i], subLanes, out groupCount, ref trafficLights);
+                    }
+                    else if (customTrafficLights.GetPatternOnly() == CustomTrafficLights.Patterns.CustomPhase)
+                    {
+                        // CustomPhase still supported for manual configuration
+                        CustomPhaseUtils.ValidateBuffer(ref this, entityArray[i], subLanes, connectedEdgeAccessor[i], edgeGroupMaskAccessor[i], subLaneGroupMaskAccessor[i], m_ExtraTypeHandle.m_SubLane);
+                        CustomPhaseProcessor.ProcessLanes(ref this, unfilteredChunkIndex, entityArray[i], connectedEdgeAccessor[i], subLanes, out groupCount, ref trafficLights, ref customTrafficLights, edgeGroupMaskAccessor[i], subLaneGroupMaskAccessor[i], customPhaseDataAccessor[i]);
                     }
                     else if (customTrafficLights.GetPatternOnly() == CustomTrafficLights.Patterns.ProtectedCentreTurn)
                     {
@@ -290,7 +363,14 @@ public partial class PatchedTrafficLightInitializationSystem : Game.GameSystemBa
                     customTrafficLightsArray[i] = customTrafficLights;
                 }
 
-                InitializeTrafficLights(subLanes, groups, groupCount, flag, flag2, ref trafficLights);
+                // Add GreenWaveData component if it doesn't exist (enabled by default)
+                if (!m_ExtraTypeHandle.m_GreenWaveData.HasComponent(entityArray[i]))
+                {
+                    GreenWaveData greenWaveData = new GreenWaveData();
+                    greenWaveData.m_Enabled = true; // Enable by default
+                    m_CommandBuffer.AddComponent(unfilteredChunkIndex, entityArray[i], greenWaveData);
+                }
+
                 nativeArray3[i] = trafficLights;
                 groups.Clear();
                 vehicleLanes.Clear();

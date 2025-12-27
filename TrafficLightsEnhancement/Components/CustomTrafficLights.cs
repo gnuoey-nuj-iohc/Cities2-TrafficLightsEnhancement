@@ -94,10 +94,11 @@ public struct CustomTrafficLights : IComponentData, IQueryTypeParameter, ISerial
             reader.Read(out m_Timer);
             reader.Read(out m_ManualSignalGroup);
         }
-        if (GetPatternOnly() == Patterns.SplitPhasingAdvancedObsolete)
-        {
-            SetPatternOnly(Patterns.SplitPhasing);
-        }
+        // Keep SplitPhasingAdvancedObsolete pattern instead of converting to SplitPhasing
+        // if (GetPatternOnly() == Patterns.SplitPhasingAdvancedObsolete)
+        // {
+        //     SetPatternOnly(Patterns.SplitPhasing);
+        // }
         m_ManualSignalGroup = 0;
     }
 

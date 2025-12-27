@@ -83,13 +83,23 @@ public partial class UISystem : UISystemBase
         };
         if (m_MainPanelState == MainPanelState.Main && m_SelectedEntity != Entity.Null)
         {
+            // Ensure EdgeInfo is available for the selected entity
+            if (!m_EdgeInfoDictionary.ContainsKey(m_SelectedEntity))
+            {
+                UpdateEdgeInfo(m_SelectedEntity);
+            }
+            
             menu.items.Add(new UITypes.ItemTitle{title = "TrafficSignal"});
             menu.items.Add(UITypes.MainPanelItemPattern("Vanilla", (uint)CustomTrafficLights.Patterns.Vanilla, (uint)m_CustomTrafficLights.GetPattern()));
-            if (PredefinedPatternsProcessor.IsValidPattern(m_EdgeInfoDictionary[m_SelectedEntity], CustomTrafficLights.Patterns.SplitPhasing))
+            if (m_EdgeInfoDictionary.ContainsKey(m_SelectedEntity) && PredefinedPatternsProcessor.IsValidPattern(m_EdgeInfoDictionary[m_SelectedEntity], CustomTrafficLights.Patterns.SplitPhasing))
             {
                 menu.items.Add(UITypes.MainPanelItemPattern("SplitPhasing", (uint)CustomTrafficLights.Patterns.SplitPhasing, (uint)m_CustomTrafficLights.GetPattern()));
             }
-            if (PredefinedPatternsProcessor.IsValidPattern(m_EdgeInfoDictionary[m_SelectedEntity], CustomTrafficLights.Patterns.ProtectedCentreTurn))
+            if (m_EdgeInfoDictionary.ContainsKey(m_SelectedEntity) && PredefinedPatternsProcessor.IsValidPattern(m_EdgeInfoDictionary[m_SelectedEntity], CustomTrafficLights.Patterns.SplitPhasingAdvancedObsolete))
+            {
+                menu.items.Add(UITypes.MainPanelItemPattern("SplitPhasingAdvanced", (uint)CustomTrafficLights.Patterns.SplitPhasingAdvancedObsolete, (uint)m_CustomTrafficLights.GetPattern()));
+            }
+            if (m_EdgeInfoDictionary.ContainsKey(m_SelectedEntity) && PredefinedPatternsProcessor.IsValidPattern(m_EdgeInfoDictionary[m_SelectedEntity], CustomTrafficLights.Patterns.ProtectedCentreTurn))
             {
                 if (m_CityConfigurationSystem.leftHandTraffic)
                 {
@@ -105,7 +115,7 @@ public partial class UISystem : UISystemBase
             {
                 menu.items.Add(new UITypes.ItemButton{label = "CustomPhaseEditor", key = "state", value = $"{(int)MainPanelState.CustomPhase}", engineEventName = "C2VM.TLE.CallSetMainPanelState"});
             }
-            if (m_CustomTrafficLights.GetPatternOnly() < CustomTrafficLights.Patterns.ModDefault && !NodeUtils.HasTrainTrack(m_EdgeInfoDictionary[m_SelectedEntity]))
+            if (m_CustomTrafficLights.GetPatternOnly() < CustomTrafficLights.Patterns.ModDefault && m_EdgeInfoDictionary.ContainsKey(m_SelectedEntity) && !NodeUtils.HasTrainTrack(m_EdgeInfoDictionary[m_SelectedEntity]))
             {
                 menu.items.Add(default(UITypes.ItemDivider));
                 menu.items.Add(new UITypes.ItemTitle{title = "Options"});
@@ -268,6 +278,21 @@ public partial class UISystem : UISystemBase
                 EntityManager.AddComponent<SubLaneGroupMask>(m_SelectedEntity);
             }
             m_CustomTrafficLights.SetPattern(CustomTrafficLights.Patterns.CustomPhase);
+        }
+        else if (m_CustomTrafficLights.GetPatternOnly() == CustomTrafficLights.Patterns.SplitPhasingAdvancedObsolete)
+        {
+            if (!EntityManager.HasBuffer<CustomPhaseData>(m_SelectedEntity))
+            {
+                EntityManager.AddComponent<CustomPhaseData>(m_SelectedEntity);
+            }
+            if (!EntityManager.HasBuffer<EdgeGroupMask>(m_SelectedEntity))
+            {
+                EntityManager.AddComponent<EdgeGroupMask>(m_SelectedEntity);
+            }
+            if (!EntityManager.HasBuffer<SubLaneGroupMask>(m_SelectedEntity))
+            {
+                EntityManager.AddComponent<SubLaneGroupMask>(m_SelectedEntity);
+            }
         }
         UpdateEntity();
         m_MainPanelBinding.Update();

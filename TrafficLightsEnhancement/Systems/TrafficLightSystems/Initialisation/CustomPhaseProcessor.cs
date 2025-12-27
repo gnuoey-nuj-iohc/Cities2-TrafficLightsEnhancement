@@ -384,7 +384,7 @@ public struct CustomPhaseProcessor
             // This ensures pedestrians wait when vehicles have green on their crossing
             // SetupPedestrianLanes checks overlaps with vehicle lanes and sets pedestrian group mask
             // so pedestrians only get green when vehicles crossing their path don't have green
-            PredefinedPatternsProcessor.SetupPedestrianLanes(ref job, subLanes, groupCount, laneConnectionMap);
+            PredefinedPatternsProcessor.SetupPedestrianLanes(ref job, subLanes, groupCount, laneConnectionMap, isAdvancedSplitPhasing);
             
             // Create default CustomPhaseData for each group with adaptive settings
             // If CustomPhaseData already exists (for existing traffic lights), clear and recreate it

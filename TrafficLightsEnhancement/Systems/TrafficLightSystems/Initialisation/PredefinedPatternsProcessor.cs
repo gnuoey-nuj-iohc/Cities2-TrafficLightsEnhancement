@@ -464,7 +464,7 @@ public class PredefinedPatternsProcessor
         }
     }
 
-    public static void SetupPedestrianLanes(ref InitializeTrafficLightsJob job, DynamicBuffer<SubLane> subLanes, int groupCount, NativeHashMap<Entity, NodeUtils.LaneConnection> laneConnectionMap)
+    public static void SetupPedestrianLanes(ref InitializeTrafficLightsJob job, DynamicBuffer<SubLane> subLanes, int groupCount, NativeHashMap<Entity, NodeUtils.LaneConnection> laneConnectionMap, bool isAdvancedSplitPhasing = false)
     {
         for (int i = 0; i < subLanes.Length; i++)
         {
@@ -475,8 +475,36 @@ public class PredefinedPatternsProcessor
             }
             if (!job.m_Overlaps.TryGetBuffer(subLane, out var laneOverlapBuffer) || laneOverlapBuffer.Length == 0)
             {
-                // Set all groups to green since there is no overlap
-                laneSignal.m_GroupMask |= (ushort)((1 << groupCount) - 1);
+                // For Advanced Split Phasing, pedestrians should wait when any vehicle group is active
+                // So set to all groups except all vehicle groups (i.e., no groups = always red)
+                // For non-Advanced Split Phasing, set all groups to green since there is no overlap
+                if (isAdvancedSplitPhasing)
+                {
+                    // In Advanced Split Phasing, pedestrians should only have green when NO vehicle groups are active
+                    // This means they should wait during all vehicle phases
+                    // Set to 0 (no groups) so pedestrians always wait, or set to a special pedestrian-only phase
+                    // Actually, we want pedestrians to have green when vehicles don't, so we need to find all vehicle groups
+                    // and set pedestrian to NOT those groups
+                    ushort allVehicleGroups = 0;
+                    for (int j = 0; j < subLanes.Length; j++)
+                    {
+                        Entity otherSubLane = subLanes[j].m_SubLane;
+                        if (job.m_CarLaneData.HasComponent(otherSubLane) || job.m_ExtraTypeHandle.m_TrackLane.HasComponent(otherSubLane))
+                        {
+                            if (job.m_LaneSignalData.TryGetComponent(otherSubLane, out var otherLaneSignal))
+                            {
+                                allVehicleGroups |= otherLaneSignal.m_GroupMask;
+                            }
+                        }
+                    }
+                    // Pedestrians should have green when vehicle groups are NOT active
+                    laneSignal.m_GroupMask = (ushort)(((1 << groupCount) - 1) & ~allVehicleGroups);
+                }
+                else
+                {
+                    // Set all groups to green since there is no overlap
+                    laneSignal.m_GroupMask |= (ushort)((1 << groupCount) - 1);
+                }
             }
             else
             {
@@ -518,6 +546,27 @@ public class PredefinedPatternsProcessor
                     }
                     overlapGroupMask |= overlapLaneSignal.m_GroupMask;
                 }
+                
+                // For Advanced Split Phasing, also exclude all other vehicle groups
+                // This ensures pedestrians wait when ANY vehicle group is active
+                if (isAdvancedSplitPhasing)
+                {
+                    ushort allVehicleGroups = 0;
+                    for (int j = 0; j < subLanes.Length; j++)
+                    {
+                        Entity otherSubLane = subLanes[j].m_SubLane;
+                        if (job.m_CarLaneData.HasComponent(otherSubLane) || job.m_ExtraTypeHandle.m_TrackLane.HasComponent(otherSubLane))
+                        {
+                            if (job.m_LaneSignalData.TryGetComponent(otherSubLane, out var otherLaneSignal))
+                            {
+                                allVehicleGroups |= otherLaneSignal.m_GroupMask;
+                            }
+                        }
+                    }
+                    // Combine overlap groups with all vehicle groups
+                    overlapGroupMask |= allVehicleGroups;
+                }
+                
                 laneSignal.m_GroupMask |= (ushort)((~overlapGroupMask) & ((1 << groupCount) - 1));
             }
             job.m_LaneSignalData[subLane] = laneSignal;

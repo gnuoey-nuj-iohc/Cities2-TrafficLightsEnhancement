@@ -327,6 +327,33 @@ public struct CustomPhaseProcessor
                     primaryGroup = (ushort)(originalMask & (~(originalMask - 1)));
                 }
                 
+                // If primaryGroup is still 0, try to find the group from the edge this lane belongs to
+                // This ensures left-turn lanes and other lanes that might not be in originalGroupMasks still get a group
+                if (primaryGroup == 0 && laneConnectionMap.TryGetValue(subLane, out var laneConnection))
+                {
+                    Entity sourceEdge = laneConnection.m_SourceEdge;
+                    if (sourceEdge != Entity.Null)
+                    {
+                        // Try to get edge group from edgeActualGroupMap first
+                        if (!useEdgeToGroupMap && edgeActualGroupMap.TryGetValue(sourceEdge, out ushort actualGroup))
+                        {
+                            primaryGroup = actualGroup;
+                        }
+                        // Then try edgeToGroupMap
+                        else if (edgeToGroupMap.TryGetValue(sourceEdge, out ushort assignedGroup))
+                        {
+                            primaryGroup = assignedGroup;
+                        }
+                    }
+                }
+                
+                // Final fallback: if still no group, use the first group
+                // This should rarely happen, but ensures all lanes get a group
+                if (primaryGroup == 0 && groupCount > 0)
+                {
+                    primaryGroup = 1;
+                }
+                
                 // Restrict to only the primary group to prevent permissive turns
                 // This ensures each lane only gets green when its own group is active
                 // Works for car lanes, track lanes (trams), and bicycle lanes (treated as car lanes)

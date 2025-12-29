@@ -301,6 +301,13 @@ public partial class PatchedTrafficLightInitializationSystem : Game.GameSystemBa
                         
                         // CustomPhaseProcessor will automatically create groups and CustomPhaseData if buffer is empty (like "Advanced Split Phasing")
                         CustomPhaseProcessor.ProcessLanes(ref this, unfilteredChunkIndex, entityArray[i], connectedEdgeAccessor[i], subLanes, out groupCount, ref trafficLights, ref customTrafficLights, edgeGroupMaskAccessor[i], subLaneGroupMaskAccessor[i], customPhaseDataAccessor[i]);
+                        
+                        // 고급분할신호에서도 동시보행신호가 작동하도록 함
+                        // 단, 고급분할신호일 때는 동시보행신호를 비활성화하지 않음 (정상 작동)
+                        if ((customTrafficLights.GetPattern() & CustomTrafficLights.Patterns.ExclusivePedestrian) != 0)
+                        {
+                            PredefinedPatternsProcessor.AddExclusivePedestrianPhase(ref this, subLanes, ref groupCount, ref trafficLights, ref customTrafficLights);
+                        }
                     }
                 }
                 
@@ -353,6 +360,7 @@ public partial class PatchedTrafficLightInitializationSystem : Game.GameSystemBa
                     {
                         PredefinedPatternsProcessor.AddCentreTurnGiveWay(ref this, unfilteredChunkIndex, subLanes, ref trafficLights);
                     }
+                    // 동시보행신호 추가 (모든 패턴에서 작동)
                     if ((customTrafficLights.GetPattern() & CustomTrafficLights.Patterns.ExclusivePedestrian) != 0)
                     {
                         PredefinedPatternsProcessor.AddExclusivePedestrianPhase(ref this, subLanes, ref groupCount, ref trafficLights, ref customTrafficLights);

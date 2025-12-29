@@ -527,6 +527,19 @@ public struct CustomPhaseProcessor
                 }
             }
             
+            // Ensure groupCount is valid before returning
+            // Use CustomPhaseData length as fallback if groupCount is 0 or invalid
+            if (groupCount == 0 && customPhaseDatas.Length > 0)
+            {
+                groupCount = customPhaseDatas.Length;
+            }
+            
+            // Ensure groupCount is at least 1 to prevent signal lights from disappearing
+            if (groupCount == 0)
+            {
+                groupCount = 1;
+            }
+            
             // SetupSplitPhasing already configured all signals, and EdgeGroupMask is now synchronized
             return;
         }

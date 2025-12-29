@@ -302,6 +302,21 @@ public partial class PatchedTrafficLightInitializationSystem : Game.GameSystemBa
                         // CustomPhaseProcessor will automatically create groups and CustomPhaseData if buffer is empty (like "Advanced Split Phasing")
                         CustomPhaseProcessor.ProcessLanes(ref this, unfilteredChunkIndex, entityArray[i], connectedEdgeAccessor[i], subLanes, out groupCount, ref trafficLights, ref customTrafficLights, edgeGroupMaskAccessor[i], subLaneGroupMaskAccessor[i], customPhaseDataAccessor[i]);
                         
+                        // Use CustomPhaseData length as fallback if groupCount is 0 or invalid
+                        // This ensures signal lights don't disappear when groupCount calculation fails
+                        var customPhaseDataBuffer = customPhaseDataAccessor[i];
+                        if (groupCount == 0 && customPhaseDataBuffer.Length > 0)
+                        {
+                            groupCount = customPhaseDataBuffer.Length;
+                        }
+                        
+                        // Ensure groupCount is at least 1 to prevent signal lights from disappearing
+                        // This can happen if there are no vehicle lanes or if SetupSplitPhasing fails
+                        if (groupCount == 0)
+                        {
+                            groupCount = 1;
+                        }
+                        
                         // Update trafficLights.m_SignalGroupCount after CustomPhaseProcessor.ProcessLanes
                         // This ensures the signal group count is properly set for advanced split phasing
                         trafficLights.m_SignalGroupCount = (byte)math.min(16, groupCount);

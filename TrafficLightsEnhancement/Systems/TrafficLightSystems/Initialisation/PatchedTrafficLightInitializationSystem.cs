@@ -304,10 +304,9 @@ public partial class PatchedTrafficLightInitializationSystem : Game.GameSystemBa
                         
                         // Use CustomPhaseData length as fallback if groupCount is 0 or invalid
                         // This ensures signal lights don't disappear when groupCount calculation fails
-                        var customPhaseDataBuffer = customPhaseDataAccessor[i];
-                        if (groupCount == 0 && customPhaseDataBuffer.Length > 0)
+                        if (groupCount == 0 && customPhaseDataAccessor[i].Length > 0)
                         {
-                            groupCount = customPhaseDataBuffer.Length;
+                            groupCount = customPhaseDataAccessor[i].Length;
                         }
                         
                         // Ensure groupCount is at least 1 to prevent signal lights from disappearing

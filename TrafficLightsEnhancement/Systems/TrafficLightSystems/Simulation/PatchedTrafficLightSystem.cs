@@ -265,6 +265,19 @@ public partial class PatchedTrafficLightSystem : GameSystemBase
 
         private bool UpdateTrafficLightState(NativeList<Entity> laneSignals, MoveableBridgeData moveableBridgeData, ref TrafficLights trafficLights, ref CustomTrafficLights customTrafficLights)
         {
+            // Safety check: if stuck in any state for too long (300 ticks = 75 seconds), force reset
+            // This prevents traffic lights from getting stuck indefinitely
+            const int maxStuckTime = 300;
+            if (trafficLights.m_Timer >= maxStuckTime)
+            {
+                trafficLights.m_State = Game.Net.TrafficLightState.None;
+                trafficLights.m_CurrentSignalGroup = 0;
+                trafficLights.m_NextSignalGroup = 0;
+                trafficLights.m_Timer = 0;
+                customTrafficLights.m_Timer = 0;
+                return true;
+            }
+            
             bool canExtend;
             switch (trafficLights.m_State)
             {

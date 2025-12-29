@@ -140,6 +140,33 @@ namespace C2VM.TrafficLightsEnhancement.Systems.TrafficLightSystems.Simulation
                 customPhaseDataBuffer[currentSignalIndex] = phase;
                 byte nextGroup = GetNextSignalGroup(trafficLights.m_CurrentSignalGroup, customPhaseDataBuffer, customTrafficLights, currentNode, job, out var linked);
                 
+                // Check if there are pedestrian phases waiting with high occupancy
+                // Force change to pedestrian phase if they've been waiting too long
+                bool forcePedestrianChange = false;
+                byte pedestrianGroup = 0;
+                int maxPedestrianWait = 0;
+                int maxPedestrianOccupancy = 0;
+                for (int i = 0; i < customPhaseDataBuffer.Length; i++)
+                {
+                    if ((customTrafficLights.m_PedestrianPhaseGroupMask & (1 << i)) != 0)
+                    {
+                        CustomPhaseData pedestrianPhase = customPhaseDataBuffer[i];
+                        // Force change if pedestrian phase has been waiting for more than 1 full cycle
+                        // and has pedestrians waiting
+                        if (pedestrianPhase.m_TurnsSinceLastRun >= customPhaseDataBuffer.Length && pedestrianPhase.m_PedestrianLaneOccupied > 0)
+                        {
+                            if (pedestrianPhase.m_TurnsSinceLastRun > maxPedestrianWait || 
+                                (pedestrianPhase.m_TurnsSinceLastRun == maxPedestrianWait && pedestrianPhase.m_PedestrianLaneOccupied > maxPedestrianOccupancy))
+                            {
+                                forcePedestrianChange = true;
+                                pedestrianGroup = (byte)(i + 1);
+                                maxPedestrianWait = pedestrianPhase.m_TurnsSinceLastRun;
+                                maxPedestrianOccupancy = pedestrianPhase.m_PedestrianLaneOccupied;
+                            }
+                        }
+                    }
+                }
+                
                 // Force change if maximum duration exceeded, even if nextGroup is the same
                 // This prevents a single direction from blocking others indefinitely
                 // This is critical for Advanced Split Phasing to ensure fair signal rotation
@@ -207,6 +234,28 @@ namespace C2VM.TrafficLightsEnhancement.Systems.TrafficLightSystems.Simulation
                             nextGroup = (byte)((trafficLights.m_CurrentSignalGroup % customPhaseDataBuffer.Length) + 1);
                         }
                     }
+                }
+                
+                // Safety check: if maximum duration exceeded significantly (150% of max), force reset to prevent stuck state
+                // This ensures traffic lights don't get stuck in a single state indefinitely
+                const int maxStuckTime = 300; // 300 ticks = 75 seconds at 4 ticks/second
+                if (customTrafficLights.m_Timer >= maxStuckTime)
+                {
+                    // Force reset to None state to completely reinitialize
+                    trafficLights.m_State = TrafficLightState.None;
+                    trafficLights.m_CurrentSignalGroup = 0;
+                    trafficLights.m_NextSignalGroup = 0;
+                    trafficLights.m_Timer = 0;
+                    customTrafficLights.m_Timer = 0;
+                    return true;
+                }
+                
+                // Force change to pedestrian phase if they've been waiting too long
+                // This prevents pedestrians from getting stuck when traffic lights malfunction
+                if (forcePedestrianChange && pedestrianGroup != 0 && pedestrianGroup != trafficLights.m_CurrentSignalGroup)
+                {
+                    nextGroup = pedestrianGroup;
+                    forceChange = true;
                 }
                 
                 if ((preferChange || forceChange) && nextGroup != trafficLights.m_CurrentSignalGroup)
@@ -535,6 +584,29 @@ namespace C2VM.TrafficLightsEnhancement.Systems.TrafficLightSystems.Simulation
                 CustomPhaseData phase = customPhaseDataBuffer[i];
                 byte phaseGroup = (byte)(i + 1);
                 
+                // Check if this is a pedestrian phase group
+                bool isPedestrianPhase = (customTrafficLights.m_PedestrianPhaseGroupMask & (1 << i)) != 0;
+                
+                // Boost priority for pedestrian phases that have been waiting too long
+                // This prevents pedestrians from getting stuck when traffic lights malfunction
+                int pedestrianPriorityBoost = 0;
+                if (isPedestrianPhase)
+                {
+                    // If pedestrian phase has been waiting for a long time (more than 2 full cycles)
+                    // or has high pedestrian occupancy, boost priority significantly
+                    int pedestrianWaitThreshold = customPhaseDataBuffer.Length * 2;
+                    if (phase.m_TurnsSinceLastRun >= pedestrianWaitThreshold || phase.m_PedestrianLaneOccupied >= 3)
+                    {
+                        // Boost priority significantly to ensure pedestrian phase gets activated
+                        pedestrianPriorityBoost = 50; // Large boost to override vehicle priorities
+                    }
+                    else if (phase.m_TurnsSinceLastRun >= customPhaseDataBuffer.Length || phase.m_PedestrianLaneOccupied >= 1)
+                    {
+                        // Moderate boost for pedestrian phases that have been waiting
+                        pedestrianPriorityBoost = 20;
+                    }
+                }
+                
                 // Penalize current group if it's been active (indicated by m_TurnsSinceLastRun == 0)
                 // This prevents the same group from being selected again immediately
                 // For Advanced Split Phasing, this is critical to ensure fair rotation
@@ -544,12 +616,23 @@ namespace C2VM.TrafficLightsEnhancement.Systems.TrafficLightSystems.Simulation
                     // Reduce priority for current group to allow others to have a chance
                     // This helps prevent one direction from blocking others
                     // Use a more significant penalty to ensure rotation
-                    priorityPenalty = 2f; // Subtract 2 from priority (increased from 1f)
+                    // But don't penalize pedestrian phases that are stuck
+                    if (!isPedestrianPhase || phase.m_PedestrianLaneOccupied == 0)
+                    {
+                        priorityPenalty = 2f; // Subtract 2 from priority (increased from 1f)
+                    }
                 }
                 
                 // Calculate weighted waiting time
                 // This considers lane occupancy, waiting time, and how long since last run
-                float weightedWaiting = ((float)phase.TotalLaneOccupied()) * phase.m_LaneOccupiedMultiplier * math.pow((float)phase.m_TurnsSinceLastRun / (float)customPhaseDataBuffer.Length, phase.m_IntervalExponent);
+                // Boost waiting time for pedestrian phases with high occupancy
+                float pedestrianWaitingMultiplier = 1.0f;
+                if (isPedestrianPhase && phase.m_PedestrianLaneOccupied > 0)
+                {
+                    // Increase waiting time weight for pedestrian phases with waiting pedestrians
+                    pedestrianWaitingMultiplier = 1.0f + (float)phase.m_PedestrianLaneOccupied * 0.5f;
+                }
+                float weightedWaiting = ((float)phase.TotalLaneOccupied()) * phase.m_LaneOccupiedMultiplier * math.pow((float)phase.m_TurnsSinceLastRun / (float)customPhaseDataBuffer.Length, phase.m_IntervalExponent) * pedestrianWaitingMultiplier;
                 
                 // Apply Green Wave bonus if available
                 // Green Wave coordination helps synchronize adjacent intersections
@@ -558,9 +641,10 @@ namespace C2VM.TrafficLightsEnhancement.Systems.TrafficLightSystems.Simulation
                     weightedWaiting *= (1.0f + bonus * 0.5f); // 50% bonus for green wave coordination
                 }
                 
-                // Apply priority with penalty
+                // Apply priority with penalty and pedestrian boost
                 // The penalty ensures that even high-priority groups will eventually yield
-                int effectivePriority = phase.m_Priority - (int)priorityPenalty;
+                // The pedestrian boost ensures pedestrians don't get stuck
+                int effectivePriority = phase.m_Priority - (int)priorityPenalty + pedestrianPriorityBoost;
                 
                 if (effectivePriority > maxPriority)
                 {

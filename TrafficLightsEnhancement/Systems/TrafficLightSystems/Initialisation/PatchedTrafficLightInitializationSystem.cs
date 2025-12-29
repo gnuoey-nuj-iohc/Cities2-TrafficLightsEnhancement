@@ -307,6 +307,47 @@ public partial class PatchedTrafficLightInitializationSystem : Game.GameSystemBa
                         if ((customTrafficLights.GetPattern() & CustomTrafficLights.Patterns.ExclusivePedestrian) != 0)
                         {
                             PredefinedPatternsProcessor.AddExclusivePedestrianPhase(ref this, subLanes, ref groupCount, ref trafficLights, ref customTrafficLights);
+                            
+                            // After adding exclusive pedestrian phase, update YieldGroupMask for kerbside turns
+                            // to exclude the pedestrian group from allowing turns on red
+                            ushort pedestrianGroupMask = (ushort)customTrafficLights.m_PedestrianPhaseGroupMask;
+                            if (pedestrianGroupMask != 0)
+                            {
+                                for (int j = 0; j < subLanes.Length; j++)
+                                {
+                                    Entity subLane = subLanes[j].m_SubLane;
+                                    if (!m_ExtraTypeHandle.m_ExtraLaneSignal.HasComponent(subLane))
+                                    {
+                                        continue;
+                                    }
+                                    if (!m_CarLaneData.TryGetComponent(subLane, out var carLane))
+                                    {
+                                        continue;
+                                    }
+                                    
+                                    // Check if this is a kerbside turn lane
+                                    bool isKerbsideTurn = false;
+                                    if (m_LeftHandTraffic && (carLane.m_Flags & (CarLaneFlags.TurnLeft | CarLaneFlags.GentleTurnLeft)) != 0)
+                                    {
+                                        isKerbsideTurn = true;
+                                    }
+                                    else if (!m_LeftHandTraffic && (carLane.m_Flags & (CarLaneFlags.TurnRight | CarLaneFlags.GentleTurnRight)) != 0)
+                                    {
+                                        isKerbsideTurn = true;
+                                    }
+                                    
+                                    if (!isKerbsideTurn)
+                                    {
+                                        continue;
+                                    }
+                                    
+                                    // Update YieldGroupMask to exclude pedestrian group
+                                    ExtraLaneSignal extraLaneSignal = m_ExtraTypeHandle.m_ExtraLaneSignal[subLane];
+                                    extraLaneSignal.m_YieldGroupMask = (ushort)(extraLaneSignal.m_YieldGroupMask & ~pedestrianGroupMask);
+                                    extraLaneSignal.m_IgnorePriorityGroupMask = extraLaneSignal.m_YieldGroupMask;
+                                    m_CommandBuffer.SetComponent(unfilteredChunkIndex, subLane, extraLaneSignal);
+                                }
+                            }
                         }
                     }
                 }

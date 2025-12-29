@@ -308,44 +308,74 @@ public partial class PatchedTrafficLightInitializationSystem : Game.GameSystemBa
                         {
                             PredefinedPatternsProcessor.AddExclusivePedestrianPhase(ref this, subLanes, ref groupCount, ref trafficLights, ref customTrafficLights);
                             
-                            // After adding exclusive pedestrian phase, update YieldGroupMask for kerbside turns
-                            // to exclude the pedestrian group from allowing turns on red
+                            // After adding exclusive pedestrian phase, setup YieldGroupMask for kerbside turns
+                            // This allows right turns on red when other vehicle groups are active, but not when pedestrian group is active
                             ushort pedestrianGroupMask = (ushort)customTrafficLights.m_PedestrianPhaseGroupMask;
-                            if (pedestrianGroupMask != 0)
+                            ushort allGroupsMask = (ushort)((1 << groupCount) - 1);
+                            
+                            for (int j = 0; j < subLanes.Length; j++)
                             {
-                                for (int j = 0; j < subLanes.Length; j++)
+                                Entity subLane = subLanes[j].m_SubLane;
+                                if (!m_CarLaneData.TryGetComponent(subLane, out var carLane))
                                 {
-                                    Entity subLane = subLanes[j].m_SubLane;
-                                    if (!m_ExtraTypeHandle.m_ExtraLaneSignal.HasComponent(subLane))
-                                    {
-                                        continue;
-                                    }
-                                    if (!m_CarLaneData.TryGetComponent(subLane, out var carLane))
-                                    {
-                                        continue;
-                                    }
-                                    
-                                    // Check if this is a kerbside turn lane
-                                    bool isKerbsideTurn = false;
-                                    if (m_LeftHandTraffic && (carLane.m_Flags & (CarLaneFlags.TurnLeft | CarLaneFlags.GentleTurnLeft)) != 0)
-                                    {
-                                        isKerbsideTurn = true;
-                                    }
-                                    else if (!m_LeftHandTraffic && (carLane.m_Flags & (CarLaneFlags.TurnRight | CarLaneFlags.GentleTurnRight)) != 0)
-                                    {
-                                        isKerbsideTurn = true;
-                                    }
-                                    
-                                    if (!isKerbsideTurn)
-                                    {
-                                        continue;
-                                    }
-                                    
-                                    // Update YieldGroupMask to exclude pedestrian group
-                                    ExtraLaneSignal extraLaneSignal = m_ExtraTypeHandle.m_ExtraLaneSignal[subLane];
-                                    extraLaneSignal.m_YieldGroupMask = (ushort)(extraLaneSignal.m_YieldGroupMask & ~pedestrianGroupMask);
-                                    extraLaneSignal.m_IgnorePriorityGroupMask = extraLaneSignal.m_YieldGroupMask;
+                                    continue;
+                                }
+                                if (!m_LaneSignalData.TryGetComponent(subLane, out var laneSignal))
+                                {
+                                    continue;
+                                }
+                                
+                                // Check if this is a kerbside turn lane
+                                bool isKerbsideTurn = false;
+                                if (m_LeftHandTraffic && (carLane.m_Flags & (CarLaneFlags.TurnLeft | CarLaneFlags.GentleTurnLeft)) != 0)
+                                {
+                                    isKerbsideTurn = true;
+                                }
+                                else if (!m_LeftHandTraffic && (carLane.m_Flags & (CarLaneFlags.TurnRight | CarLaneFlags.GentleTurnRight)) != 0)
+                                {
+                                    isKerbsideTurn = true;
+                                }
+                                
+                                if (!isKerbsideTurn)
+                                {
+                                    continue;
+                                }
+                                
+                                // Calculate which groups allow turning on red
+                                // Allow turning on red when:
+                                // 1. Another vehicle group (not pedestrian) is active
+                                // 2. Not the same group as this lane (to avoid conflicts)
+                                ushort allowTurningOnRedGroupMask = (ushort)(allGroupsMask & ~pedestrianGroupMask & ~laneSignal.m_GroupMask);
+                                
+                                // Only apply if there are other groups to allow turning on red
+                                if (allowTurningOnRedGroupMask == 0)
+                                {
+                                    continue;
+                                }
+                                
+                                // Get or create ExtraLaneSignal
+                                ExtraLaneSignal extraLaneSignal = new ExtraLaneSignal();
+                                if (m_ExtraTypeHandle.m_ExtraLaneSignal.HasComponent(subLane))
+                                {
+                                    extraLaneSignal = m_ExtraTypeHandle.m_ExtraLaneSignal[subLane];
+                                }
+                                else
+                                {
+                                    extraLaneSignal.m_SourceSubLane = subLane;
+                                }
+                                
+                                // Set YieldGroupMask to allow turning on red when other vehicle groups are active
+                                extraLaneSignal.m_YieldGroupMask = allowTurningOnRedGroupMask;
+                                extraLaneSignal.m_IgnorePriorityGroupMask = allowTurningOnRedGroupMask;
+                                
+                                // Update the ExtraLaneSignal component
+                                if (m_ExtraTypeHandle.m_ExtraLaneSignal.HasComponent(subLane))
+                                {
                                     m_CommandBuffer.SetComponent(unfilteredChunkIndex, subLane, extraLaneSignal);
+                                }
+                                else
+                                {
+                                    m_CommandBuffer.AddComponent(unfilteredChunkIndex, subLane, extraLaneSignal);
                                 }
                             }
                         }

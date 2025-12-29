@@ -435,7 +435,9 @@ public struct CustomPhaseProcessor
             
             // For Advanced Split Phasing, always enable "Allow Turning on Red" for kerbside turns
             // This improves traffic flow by allowing right turns (or left turns in LHT) on red when safe
-            if (isAdvancedSplitPhasing)
+            // Skip YieldGroupMask setup if exclusive pedestrian phase is enabled, as it will be handled after AddExclusivePedestrianPhase
+            bool hasExclusivePedestrian = (customTrafficLights.GetPattern() & CustomTrafficLights.Patterns.ExclusivePedestrian) != 0;
+            if (isAdvancedSplitPhasing && !hasExclusivePedestrian)
             {
                 // Calculate pedestrian group mask (all groups that have pedestrian signals)
                 // Pedestrian groups should not allow turning on red for safety

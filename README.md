@@ -8,6 +8,13 @@ This mod stores extra data in your saves to provide additional functionality. On
 
 You cannot downgrade this mod to an older version. Cities saved with the new version are not compatible with previous versions.
 
+## Features
+
+* **Advanced Split Phasing**: Adaptive traffic light control that adjusts based on traffic conditions
+* **Exclusive Pedestrian Phase**: Works with all signal patterns including Advanced Split Phasing
+* **Right Turn on Red**: Allows safe right turns (or left turns in LHT) on red signals when using Advanced Split Phasing
+* **Custom Phase Configuration**: Manual configuration of traffic light phases for complex intersections
+
 > [!WARNING]
 > These modifications are highly experimental. Your game may crash more frequently, and your save files could be corrupted.
 
@@ -18,6 +25,11 @@ Do you have any suggestion on the translations? You could submit them on [Crowdi
 You can download the mod from [Paradox Mods](https://mods.paradoxplaza.com/mods/78960/Windows) or install it manually as a [local mod](https://cs2.paradoxwikis.com/Modding_Toolchain#Local_Mods_Location).
 
 The instructions for building the mod yourself are available [here](https://github.com/slyh/Cities2-TrafficLightsEnhancement/tree/master/BUILD.md).
+
+## Recent Changes
+
+* Fixed exclusive pedestrian phase to work properly with Advanced Split Phasing pattern
+* Improved compatibility between different signal patterns
 
 ## Acknowledgements
 
